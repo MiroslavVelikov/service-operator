@@ -12,6 +12,10 @@ const (
 	MAX_ALLOWED_PORT  = 65535
 )
 
+type EchoInput struct {
+	Message string `json:"message"`
+}
+
 type ServiceConfig struct {
 	Name     string `json:"name"`
 	Image    string `json:"image"`
