@@ -1,14 +1,17 @@
 package main
 
 import (
-	"net/http"
+	"context"
+	"time"
 
 	"github.com/service-operator/internal/api"
-
 	log "github.com/sirupsen/logrus"
 )
 
+const SHUTDOWN_TIMEOUT = time.Second * 5
+
 func main() {
-	srv := api.NewApiHandler()
-	log.Fatal(http.ListenAndServe(":8080", srv))
+	if err := api.RunServer(context.Background(), SHUTDOWN_TIMEOUT); err != nil {
+		log.Fatal(err)
+	}
 }

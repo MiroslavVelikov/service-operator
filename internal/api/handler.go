@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/service-operator/internal/api/health"
 	"github.com/service-operator/internal/config"
 )
 
@@ -16,6 +17,8 @@ const (
 
 func NewApiHandler() *http.ServeMux {
 	router := http.NewServeMux()
+
+	health.SetupHealthHandler(router)
 
 	router.HandleFunc("GET /version", getVersion)
 	router.HandleFunc("POST /echo", replyEcho)
