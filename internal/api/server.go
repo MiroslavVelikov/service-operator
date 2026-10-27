@@ -79,7 +79,7 @@ func getPort() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("invalid PORT %q: must be an integer", port)
 	} else if iPort < 1 || iPort > LAST_AVAILABLE_PORT {
-		return "", fmt.Errorf("PORT out of range: %s, should be [1; %s]", port, LAST_AVAILABLE_PORT)
+		return "", fmt.Errorf("PORT out of range: %s, should be [1; %d]", port, LAST_AVAILABLE_PORT)
 	}
 
 	return port, nil
