@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"net/http"
 	"os"
+	"os/signal"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,6 +21,8 @@ const (
 	FILE_PATH_POS = 2
 
 	COMMAND_LENGTH = 2
+
+	WORKERS_COUNT = 3
 
 	INVALID_EXIT_CODE    = -1
 	OCCURRED_FAILER_CODE = 1
@@ -58,33 +62,57 @@ func main() {
 			os.Exit(INVALID_EXIT_CODE)
 		}
 
-		hC := http.Client{Timeout: time.Duration(10) * time.Second}
-		var wg sync.WaitGroup
-		var failed atomic.Bool
-		for _, path := range validateCmd.Args() {
-			wg.Go(func() {
-				now := time.Now()
-				resp, err := hC.Get(path)
-				duration := time.Since(now)
-				if err != nil {
-					fmt.Printf("%s, failed, %v, %v\n", path, duration, err)
-					failed.Store(true)
-					return
-				}
-				defer resp.Body.Close()
+		var workers sync.WaitGroup
+		jobs := make(chan string)
+		outputs := make(chan CheckOutput, WORKERS_COUNT)
+		client := http.Client{Timeout: time.Duration(10) * time.Second}
+		failed := atomic.Bool{}
 
-				errMsg := "no errors occurred"
-				if resp.StatusCode/100 != 2 {
-					failed.Store(true)
-					if resp.StatusCode/100 == 5 {
-						errMsg = fmt.Sprintf("HTTP failure: %s", resp.Status)
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer cancel()
+		for w := 1; w <= WORKERS_COUNT; w++ {
+			workers.Go(func() {
+				for url := range jobs {
+					if ctx.Err() != nil {
+						return
+					}
+
+					result := checkURL(ctx, &client, url)
+					if result.StatusCode/100 != 2 {
+						failed.Store(true)
+					}
+
+					select {
+					case outputs <- result:
+					case <-ctx.Done():
+						return
 					}
 				}
-				fmt.Printf("%s, %d, %v, %s\n", path, resp.StatusCode, duration, errMsg)
 			})
 		}
-		wg.Wait()
-		if failed.Load() {
+
+		go func() {
+			defer close(jobs)
+
+			for _, url := range validateCmd.Args() {
+				select {
+				case <-ctx.Done():
+					return
+				case jobs <- url:
+				}
+			}
+		}()
+
+		go func() {
+			workers.Wait()
+			close(outputs)
+		}()
+
+		for output := range outputs {
+			fmt.Printf("%s, %v, %s, %s\n", output.URL, output.StatusCode, output.Duration, output.Error)
+		}
+
+		if failed.Load() || ctx.Err() != nil {
 			os.Exit(OCCURRED_FAILER_CODE)
 		}
 	case COMMAND_HELP:
@@ -105,8 +133,49 @@ func printUsage() {
 }
 
 type CheckOutput struct {
-	URL        string `json:"url"`
-	StatusCode int    `json:"status_code"`
-	Duration   int    `json:"duration"`
-	Error      string `json:"error"`
+	URL        string        `json:"url"`
+	StatusCode int           `json:"status_code"`
+	Duration   time.Duration `json:"duration"`
+	Error      string        `json:"error"`
+}
+
+func checkURL(
+	ctx context.Context,
+	client *http.Client,
+	url string,
+) CheckOutput {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return CheckOutput{
+			URL:        url,
+			StatusCode: 0,
+			Duration:   0,
+			Error:      err.Error(),
+		}
+	}
+
+	now := time.Now()
+	resp, err := client.Do(req)
+	duration := time.Since(now)
+	if err != nil {
+		return CheckOutput{
+			URL:        url,
+			StatusCode: http.StatusInternalServerError,
+			Duration:   duration,
+			Error:      err.Error(),
+		}
+	}
+	defer resp.Body.Close()
+
+	errMsg := "no errors occurred"
+	if resp.StatusCode/100 != 2 {
+		errMsg = fmt.Sprintf("HTTP failure: %s", resp.Status)
+	}
+
+	return CheckOutput{
+		URL:        url,
+		StatusCode: resp.StatusCode,
+		Duration:   duration,
+		Error:      errMsg,
+	}
 }
